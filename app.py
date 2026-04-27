@@ -71,6 +71,28 @@ def clean_html(raw_html):
     cleanr = re.compile('<.*?>')
     return " ".join(re.sub(cleanr, '', raw_html).split())
 
+def get_weather(city_name):
+    """Fetch current weather for a city using OpenWeatherMap free tier."""
+    weather_key = os.environ.get("OPENWEATHER_API_KEY", "")
+    if not weather_key:
+        return None
+    try:
+        url = f"https://api.openweathermap.org/data/2.5/weather"
+        params = {"q": city_name, "appid": weather_key, "units": "imperial"}
+        res = requests.get(url, params=params, timeout=10)
+        if res.status_code == 200:
+            d = res.json()
+            return {
+                "temp": round(d["main"]["temp"]),
+                "feels_like": round(d["main"]["feels_like"]),
+                "description": d["weather"][0]["description"].capitalize(),
+                "humidity": d["main"]["humidity"],
+                "icon": d["weather"][0]["icon"]
+            }
+    except:
+        return None
+
+
 # --- 1. Page Config ---
 st.set_page_config(page_title="Agentic Trip Planner", layout="wide")
 st.title("🌍 Agentic Trip Planner")
@@ -90,6 +112,8 @@ with st.sidebar:
         st.session_state.itinerary_json = None
     if "poi_cache" not in st.session_state:
         st.session_state.poi_cache = {}
+    if "compare_json" not in st.session_state:
+        st.session_state.compare_json = None
 
     default_key = os.environ.get("OPENAI_API_KEY", "")
     api_key = st.text_input("Enter OpenAI API Key", type="password", value=st.session_state['openai_api_key'] or default_key)
@@ -123,7 +147,7 @@ st.header("System Connectivity Check")
 
 def test_osm():
     # ✅ Fix — more specific User-Agent that Nominatim accepts
-     {'User-Agent': 'CapstoneTripPlanner/1.0 (github.com/Jghazi88/Trip-Planner)'}
+    headers = {'User-Agent': 'CapstoneTripPlanner/1.0 (github.com/Jghazi88/Trip-Planner)'}
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Geocoding (Nominatim)")
@@ -159,6 +183,7 @@ INTEREST_MAP = {
 def get_coordinates(city_name):
     if not city_name.strip():
         return None, None
+    
     headers = {'User-Agent': 'CapstoneTripPlanner/1.0 (github.com/Jghazi88/Trip-Planner)'}
     url = f"https://nominatim.openstreetmap.org/search?format=json&q={city_name}"
 
@@ -180,7 +205,7 @@ def get_coordinates(city_name):
 
 @st.cache_data(ttl=3600)
 def search_pois(lat, lon, interest, query=None, city_key=""):
-     {'User-Agent': 'CapstoneTripPlanner/1.0 (github.com/Jghazi88/Trip-Planner)'}
+    headers = {'User-Agent': 'CapstoneTripPlanner/1.0 (github.com/Jghazi88/Trip-Planner)'}
     # ✅ Replace the query branch in search_pois
     if query:
         overpass_query = (
@@ -255,7 +280,7 @@ def fetch_wikivoyage_data(city_name):
     url = "https://en.wikivoyage.org/w/api.php"
     params = {"action": "query", "prop": "extracts", "titles": city_name, "format": "json", "explaintext": True, "redirects": 1, "formatversion": 2}
     try:
-        res = requests.get(url, params=params, headers={'User-Agent': 'CapstoneTripPlanner/1.0 (github.com/Jghazi88/Trip-Planner)'}, timeout=10)
+        res = requests.get(url, params=params,headers = {'User-Agent': 'CapstoneTripPlanner/1.0 (github.com/Jghazi88/Trip-Planner)'}, timeout=10)
         return res.json().get("query", {}).get("pages", [{}])[0].get("extract", "")
     except: return ""
 
@@ -477,6 +502,35 @@ if st.button("🚀 Generate Itinerary"):
             st.stop()
     st.rerun()
 
+if st.button("🔄 Generate Alternative Itinerary (Compare)"):
+    if not dest.strip() or not interests:
+        st.warning("Please fill in destination and interests first.")
+        st.stop()
+    lat_check, lon_check = get_coordinates(dest)
+    if lat_check is None:
+        st.error("Geocoding failed for comparison.")
+        st.stop()
+    with st.status("🔄 Generating alternative itinerary...", expanded=True):
+        client = OpenAI(api_key=st.session_state['openai_api_key'])
+        compare_prompt = (
+            f"Plan an ALTERNATIVE {days}-day trip to {dest}. "
+            f"Interests: {', '.join(interests)}. "
+            + (f"Constraints: {constraints}. " if constraints.strip() else "")
+            + "Create a DIFFERENT itinerary from the first one — different venues, different order, different neighborhoods. "
+            "CRITICAL: Return a SINGLE JSON object with keys: "
+            "'itinerary_text' (Markdown) and 'locations' (list with name, lat, lon, poi_id, day). "
+            "Do not use 0.0 for coordinates."
+        )
+        alt_ans, _ = run_agent_loop(
+            [{"role": "user", "content": compare_prompt}],
+            tools, client,
+            max_steps=max_steps,
+            model=model_choice,
+            fast_mode=True
+        )
+        st.session_state.compare_json = extract_itinerary_json(alt_ans)
+    st.rerun()
+
 # --- Results & Refinement & Feedback ---
 
 if st.session_state.itinerary_json is not None:
@@ -530,6 +584,7 @@ if st.session_state.itinerary_json is not None:
                 if lat_c:
                     final_points = [{"name": dest, "lat": lat_c, "lon": lon_c, "day": 1}]
 
+
     # --- RENDER MAP & TEXT ---
         if final_points:
             render_itinerary_map(final_points, selected_day=day_filter)
@@ -537,6 +592,43 @@ if st.session_state.itinerary_json is not None:
             st.warning("No valid coordinates found for the map.")
 
         st.markdown(display_text)
+
+        weather = get_weather(dest)
+        if weather:
+            st.divider()
+            icon_url = f"https://openweathermap.org/img/wn/{weather['icon']}@2x.png"
+            w_col1, w_col2, w_col3, w_col4 = st.columns(4)
+            with w_col1:
+                st.image(icon_url, width=60)
+                st.caption(weather["description"])
+            with w_col2:
+                st.metric("🌡️ Temperature", f"{weather['temp']}°F")
+            with w_col3:
+                st.metric("🤔 Feels Like", f"{weather['feels_like']}°F")
+            with w_col4:
+                st.metric("💧 Humidity", f"{weather['humidity']}%")
+            st.divider()
+
+        # --- SIDE-BY-SIDE COMPARISON ---
+        if st.session_state.compare_json:
+            st.divider()
+            st.subheader("🆚 Itinerary Comparison")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown("**Option A (Original)**")
+                st.markdown(data.get("itinerary_text", ""))
+            with col_b:
+                st.markdown("**Option B (Alternative)**")
+                st.markdown(st.session_state.compare_json.get("itinerary_text", ""))
+
+            if st.button("✅ Keep Option B as My Itinerary"):
+                st.session_state.itinerary_json = st.session_state.compare_json
+                st.session_state.compare_json = None
+                st.rerun()
+            if st.button("❌ Discard Comparison"):
+                st.session_state.compare_json = None
+                st.rerun()      
+
 
     # --- Task 8: User Feedback UI ---
     st.divider()
