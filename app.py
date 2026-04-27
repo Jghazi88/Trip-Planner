@@ -122,7 +122,8 @@ with st.sidebar:
 st.header("System Connectivity Check")
 
 def test_osm():
-    headers = {'User-Agent': 'CapstoneTripPlanner/1.0'}
+    # ✅ Fix — more specific User-Agent that Nominatim accepts
+     {'User-Agent': 'CapstoneTripPlanner/1.0 (github.com/Jghazi88/Trip-Planner)'}
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Geocoding (Nominatim)")
@@ -158,7 +159,7 @@ INTEREST_MAP = {
 def get_coordinates(city_name):
     if not city_name.strip():
         return None, None
-    headers = {'User-Agent': 'CapstoneTripPlanner/1.0'}
+    headers = {'User-Agent': 'CapstoneTripPlanner/1.0 (github.com/Jghazi88/Trip-Planner)'}
     url = f"https://nominatim.openstreetmap.org/search?format=json&q={city_name}"
 
     for attempt in range(3):
@@ -179,7 +180,7 @@ def get_coordinates(city_name):
 
 @st.cache_data(ttl=3600)
 def search_pois(lat, lon, interest, query=None, city_key=""):
-    headers = {'User-Agent': 'CapstoneTripPlanner/1.0'}
+     {'User-Agent': 'CapstoneTripPlanner/1.0 (github.com/Jghazi88/Trip-Planner)'}
     # ✅ Replace the query branch in search_pois
     if query:
         overpass_query = (
@@ -254,7 +255,7 @@ def fetch_wikivoyage_data(city_name):
     url = "https://en.wikivoyage.org/w/api.php"
     params = {"action": "query", "prop": "extracts", "titles": city_name, "format": "json", "explaintext": True, "redirects": 1, "formatversion": 2}
     try:
-        res = requests.get(url, params=params, headers={'User-Agent': 'CapstoneTripPlanner/1.0'}, timeout=10)
+        res = requests.get(url, params=params, headers={'User-Agent': 'CapstoneTripPlanner/1.0 (github.com/Jghazi88/Trip-Planner)'}, timeout=10)
         return res.json().get("query", {}).get("pages", [{}])[0].get("extract", "")
     except: return ""
 
