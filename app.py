@@ -10,6 +10,7 @@ import pandas as pd
 import pydeck as pdk
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from streamlit import elements
 
 # --- Feedback System ---
 
@@ -254,20 +255,22 @@ def search_pois(lat, lon, interest, query=None, city_key=""):
             boosts = feedback_boost_map(city_key)
             pois = []
             for e in elements:
-                if 'lat' not in e or 'lon' not in e:
+                lat = e.get('lat') or e.get('center', {}).get('lat')
+                lon = e.get('lon') or e.get('center', {}).get('lon')
+                if not lat or not lon:
                     continue
                 poi_id = str(e.get('id', ''))
                 poi = {
                     "poi_id": poi_id,
                     "name": e.get('tags', {}).get('name', 'Unnamed'),
-                    "lat": e.get('lat'),
-                    "lon": e.get('lon'),
+                    "lat": lat,
+                    "lon": lon,
                     "_base_score": 0.0
                 }
                 poi["_score"] = poi["_base_score"] + boosts.get(poi_id, 0.0)
                 pois.append(poi)
-            pois.sort(key=lambda x: x["_score"], reverse=True)
-            return pois
+                pois.sort(key=lambda x: x["_score"], reverse=True)
+                return pois
         except Exception as e:
             if attempt == 2:
                 return []
@@ -505,7 +508,9 @@ if st.button("🚀 Generate Itinerary"):
             "If no POIs are found for a category, include the advice in 'itinerary_text' but "
             "leave 'locations' empty for that item. Do not use 0.0 for coordinates."
         )
-                  
+
+        search_pois.clear()
+
         ans, logs = run_agent_loop([{"role": "user", "content": prompt}], tools, client, max_steps=max_steps, model=model_choice, fast_mode=fast_mode)
 
         try:
@@ -737,7 +742,5 @@ if st.session_state.trace:
                 st.success(log)
             elif log.startswith("🔧"):
                 st.code(log)
-            else:
-                st.text(log)
             else:
                 st.text(log)
