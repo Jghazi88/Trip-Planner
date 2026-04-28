@@ -216,22 +216,41 @@ def search_pois(lat, lon, interest, query=None, city_key=""):
             f');out center;'
         )
     else:
-        tags = INTEREST_MAP.get(interest, ["amenity"])
-        filters = "".join([f'node["{tag}"](around:15000,{lat},{lon});' for tag in tags])
-        overpass_query = f"[out:json];({filters});out center;"
+        amenity_tags = ["restaurant", "cafe", "food_court", "museum", "theatre", 
+                    "arts_centre", "gallery", "monument", "memorial"]
+        leisure_tags = ["park", "garden", "nature_reserve"]
+        shop_tags = ["mall", "marketplace"]
     
+        tags = INTEREST_MAP.get(interest, ["restaurant"])
+        filters = ""
+        for tag in tags:
+            if tag in leisure_tags:
+                filters += f'node["leisure"="{tag}"](around:15000,{lat},{lon});'
+            elif tag in shop_tags:
+                filters += f'node["shop"="{tag}"](around:15000,{lat},{lon});'
+            else:
+                filters += f'node["amenity"="{tag}"](around:15000,{lat},{lon});'
+    
+        overpass_query = f"[out:json];({filters});out center;"
+
     for attempt in range(3):
         try:
-            response = requests.post("https://overpass-api.de/api/interpreter", data={'data': overpass_query}, headers=headers, timeout=15)
+            response = requests.post(
+                "https://overpass-api.de/api/interpreter",
+                data={'data': overpass_query},
+                headers=headers,
+                timeout=15
+            )
             if response.status_code == 429:
                 time.sleep(2 ** attempt)
                 continue
             response.raise_for_status()
 
             elements = response.json().get('elements', [])
+            print(f"DEBUG: Overpass returned {len(elements)} elements for interest={interest}, query={query}")
             if not elements:
                 return []
-            
+
             boosts = feedback_boost_map(city_key)
             pois = []
             for e in elements:
@@ -248,14 +267,13 @@ def search_pois(lat, lon, interest, query=None, city_key=""):
                 poi["_score"] = poi["_base_score"] + boosts.get(poi_id, 0.0)
                 pois.append(poi)
             pois.sort(key=lambda x: x["_score"], reverse=True)
-            return pois    
+            return pois
         except Exception as e:
-            if attempt == 2: return []
+            if attempt == 2:
+                return []
             time.sleep(2 ** attempt)
     return []
-
 # --- Task 2: UI Implementation ---
-st.header("📍 Agent Tool: POI Discovery")
 col_city, col_interest = st.columns(2)
 with col_city:
     city_input = st.text_input("Target City", value="", key="manual_city")
@@ -349,9 +367,10 @@ def run_agent_loop(messages, tools, client, max_steps=6, model="gpt-4o", fast_mo
                                 st.session_state.poi_cache[str(p.get('poi_id'))] = p
                             
                             if poi_list:
-                                match = poi_list[0].copy()
-                                match['day'] = i + 1 
-                                st.session_state.map_points.append(match)
+                                for p in poi_list[:5]:
+                                    entry=p.copy()
+                                    entry['day'] = i + 1
+                                    st.session_state.map_points.append(entry)
 
                             result = {"results": poi_list}
                         else:
@@ -473,10 +492,12 @@ if st.button("🚀 Generate Itinerary"):
         # ✅ Fix — include constraints in the prompt
         # ✅ Add + before the conditional line
         prompt = (            
+               
             f"Plan a {days}-day trip to {dest}. Interests: {', '.join(interests)}. "
             + (f"User constraints and special requests: {constraints}. " if constraints.strip() else "")
-            + "Use the search_pois tool to find real venues. When the user mentions a specific type of place "
-            "like 'sushi restaurant', search for it using the query parameter with a specific known restaurant name if possible. "
+            + "Use the search_pois tool to find real venues. "
+            "IMPORTANT: When search_pois returns results, use the EXACT 'poi_id', 'name', 'lat', and 'lon' "
+            "values from the tool results in your locations list. Do NOT invent new values. "
             "CRITICAL: You must return a SINGLE JSON object. Do not include any text outside the JSON block. "
             "The JSON must have these keys:\n"
             "1. 'itinerary_text': Your full travel guide formatted in Markdown.\n"
@@ -484,6 +505,7 @@ if st.button("🚀 Generate Itinerary"):
             "If no POIs are found for a category, include the advice in 'itinerary_text' but "
             "leave 'locations' empty for that item. Do not use 0.0 for coordinates."
         )
+                  
         ans, logs = run_agent_loop([{"role": "user", "content": prompt}], tools, client, max_steps=max_steps, model=model_choice, fast_mode=fast_mode)
 
         try:
@@ -512,14 +534,18 @@ if st.button("🔄 Generate Alternative Itinerary (Compare)"):
         st.stop()
     with st.status("🔄 Generating alternative itinerary...", expanded=True):
         client = OpenAI(api_key=st.session_state['openai_api_key'])
-        compare_prompt = (
-            f"Plan an ALTERNATIVE {days}-day trip to {dest}. "
-            f"Interests: {', '.join(interests)}. "
-            + (f"Constraints: {constraints}. " if constraints.strip() else "")
-            + "Create a DIFFERENT itinerary from the first one — different venues, different order, different neighborhoods. "
-            "CRITICAL: Return a SINGLE JSON object with keys: "
-            "'itinerary_text' (Markdown) and 'locations' (list with name, lat, lon, poi_id, day). "
-            "Do not use 0.0 for coordinates."
+        compare_prompt = (            
+            f"Plan a {days}-day trip to {dest}. Interests: {', '.join(interests)}. "
+            + (f"User constraints and special requests: {constraints}. " if constraints.strip() else "")
+            + "Use the search_pois tool to find real venues. "
+            "IMPORTANT: When search_pois returns results, use the EXACT 'poi_id', 'name', 'lat', and 'lon' "
+            "values from the tool results in your locations list. Do NOT invent new values. "
+            "CRITICAL: You must return a SINGLE JSON object. Do not include any text outside the JSON block. "
+            "The JSON must have these keys:\n"
+            "1. 'itinerary_text': Your full travel guide formatted in Markdown.\n"
+            "2. 'locations': A list of POIs with 'name', 'lat', 'lon', 'poi_id', and 'day'.\n\n"
+            "If no POIs are found for a category, include the advice in 'itinerary_text' but "
+            "leave 'locations' empty for that item. Do not use 0.0 for coordinates."
         )
         alt_ans, _ = run_agent_loop(
             [{"role": "user", "content": compare_prompt}],
@@ -584,12 +610,7 @@ if st.session_state.itinerary_json is not None:
                 if lat_c:
                     final_points = [{"name": dest, "lat": lat_c, "lon": lon_c, "day": 1}]
 
-
-    # --- RENDER MAP & TEXT ---
-        if final_points:
-            render_itinerary_map(final_points, selected_day=day_filter)
-        else:
-            st.warning("No valid coordinates found for the map.")
+        render_itinerary_map(final_points, day_filter)
 
         st.markdown(display_text)
 
@@ -610,24 +631,24 @@ if st.session_state.itinerary_json is not None:
             st.divider()
 
         # --- SIDE-BY-SIDE COMPARISON ---
-        if st.session_state.compare_json:
-            st.divider()
-            st.subheader("🆚 Itinerary Comparison")
-            col_a, col_b = st.columns(2)
-            with col_a:
-                st.markdown("**Option A (Original)**")
-                st.markdown(data.get("itinerary_text", ""))
-            with col_b:
-                st.markdown("**Option B (Alternative)**")
-                st.markdown(st.session_state.compare_json.get("itinerary_text", ""))
+    if st.session_state.compare_json:
+        st.divider()
+        st.subheader("🆚 Itinerary Comparison")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown("**Option A (Original)**")
+            st.markdown(data.get("itinerary_text", ""))
+        with col_b:
+            st.markdown("**Option B (Alternative)**")
+            st.markdown(st.session_state.compare_json.get("itinerary_text", ""))
 
-            if st.button("✅ Keep Option B as My Itinerary"):
-                st.session_state.itinerary_json = st.session_state.compare_json
-                st.session_state.compare_json = None
-                st.rerun()
-            if st.button("❌ Discard Comparison"):
-                st.session_state.compare_json = None
-                st.rerun()      
+        if st.button("✅ Keep Option B as My Itinerary"):
+            st.session_state.itinerary_json = st.session_state.compare_json
+            st.session_state.compare_json = None
+            st.rerun()
+        if  st.button("❌ Discard Comparison"):
+            st.session_state.compare_json = None
+            st.rerun()      
 
 
     # --- Task 8: User Feedback UI ---
@@ -675,22 +696,21 @@ if st.session_state.itinerary_json is not None:
                 st.session_state.itinerary_json.get("locations", []) if st.session_state.itinerary_json else []
             )
 
+            # ✅ Fix — include refine_req and scope
             refine_prompt = (
-                f"Here is the existing {days}-day itinerary for {dest}:\n\n"
-                f"{existing_itinerary}\n\n"
+                f"Here is the existing {days}-day itinerary for {dest}:\n\n{existing_itinerary}\n\n"
                 f"Here are the existing map locations (preserve these unless the scope requires changing them):\n"
                 f"{existing_locations}\n\n"
-                f"Please modify it based on this request: '{refine_req}'. "
-                f"Scope of changes: {scope}. "
+                f"Please modify it based on this request: '{refine_req}'. "  # ← tells LLM what to change
+                f"Scope of changes: {scope}. "                               # ← tells LLM the scope
                 + (f"Remember the original constraints: {constraints}. " if constraints.strip() else "")
                 + "Use the search_pois tool to find real venues for any new places requested. "
-                "CRITICAL: You must return a SINGLE JSON object containing the ENTIRE updated itinerary for ALL days. "
-                "Do not just return the modified day. You must return the complete trip schedule. "
-                "The JSON must have these keys:\n"
-                "1. 'itinerary_text': Your full travel guide formatted in Markdown.\n"
-                "2. 'locations': A list of ALL POIs across all days with 'name', 'lat', 'lon', 'poi_id', and 'day'. "
-                "Keep all existing locations unless the scope explicitly removes them.\n\n"
-                "If no POIs are found for a category, leave 'locations' empty for that item. Do not use 0.0 for coordinates."
+                + "IMPORTANT: Use EXACT 'poi_id', 'name', 'lat', 'lon' values from tool results. Do NOT invent new values. "
+                + "CRITICAL: Return a SINGLE JSON object with keys:\n"
+                + "1. 'itinerary_text': Full travel guide in Markdown.\n"
+                + "2. 'locations': ALL POIs across all days with 'name', 'lat', 'lon', 'poi_id', 'day'. "
+                + "Keep all existing locations unless the scope explicitly removes them.\n\n"
+                + "Do not use 0.0 for coordinates."
             )
             
             with st.status("🔄 Updating your trip..."):
@@ -717,5 +737,7 @@ if st.session_state.trace:
                 st.success(log)
             elif log.startswith("🔧"):
                 st.code(log)
+            else:
+                st.text(log)
             else:
                 st.text(log)
